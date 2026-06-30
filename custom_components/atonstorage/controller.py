@@ -36,10 +36,9 @@ class Controller:
     """Define a generic AtonStorage sensor."""
 
     _session = None
-    data = None
+    monitor_data = None
     _hass: HomeAssistant = None
     _async_client = None
-    _id_plant = None
 
     def __init__(self, hass: HomeAssistant, user, password, serial_number, opts):
         """Initialize."""
@@ -55,10 +54,14 @@ class Controller:
         self._user = user
         self._password = password
         self._serial_number = serial_number
-        # self._id_plant = serial_number    #TODO
+        self._plant_id = None
         self._opts = opts
         self._session = None
-        self._async_client = get_async_client(hass, verify_ssl=False)
+        self._async_client = get_async_client(hass)
+        
+        # data dicts
+        self.monitor_data = None
+        self.energy_data = None
 
     async def login(self) -> bool:
         """Login to Aton server."""
@@ -79,14 +82,16 @@ class Controller:
             self._session = login.cookies
             _LOGGER.info("Logged in")
 
-            # get plant id
+            # get plant id  
+            decoded_login_content = login.content.decode("utf-8")
+    
             p = re.compile("var idImpianto = (.*);")
-            result = p.search(login.content.decode("utf-8"))
-            self._id_plant = result.group(1)
-            _LOGGER.info("idImpianto=%s", self._id_plant)
+            result = p.search(decoded_login_content)
+
+            self._plant_id = result.group(1)
 
             return True
-        return False
+        return False    
 
     async def refresh(self) -> None:
         """Refresh data from server"""
@@ -100,7 +105,7 @@ class Controller:
             set_interval = await self._async_client.get(
                 _SET_REQUEST_ENDPOINT.format(
                     serial_number=self._serial_number,
-                    interval=self._opts["interval"] | 15,
+                    interval=self._opts.get("interval", 15),
                 ),
                 timeout=60,
                 cookies=self._session,
@@ -112,257 +117,263 @@ class Controller:
                 self._session = None
                 raise AtonStorageConnectionError
 
-            monitor = await self._async_client.get(
+            monitor_response = await self._async_client.get(
                 _MONITOR_ENDPOINT.format(serial_number=self._serial_number),
                 timeout=60,
                 cookies=self._session,
             )
-            if monitor.content is None:
+            if monitor_response.content is None:
                 _LOGGER.error("Unable to start fetching data")
                 raise AtonStorageConnectionError
-            elif monitor.content == "Unauthorized":
+            elif monitor_response.content == "Unauthorized":
                 self._session = None
                 raise AtonStorageConnectionError
-
-            json_dict = monitor.content
-            if json_dict is not None:
-                try:
-                    self.data = json.loads(json_dict)
-                    _LOGGER.debug("Data fetched from resource: %s", json_dict)
-                except ValueError:
-                    _LOGGER.warning("REST result could not be parsed as JSON")
-                    _LOGGER.debug("Erroneous JSON: %s", self.data)
-                except Exception as exc:
-                    _LOGGER.error(exc)
-                    raise exc
-            else:
-                _LOGGER.warning("Empty reply found when expecting JSON data")
+            
+            try:
+                self.monitor_data = json.loads(monitor_response.content)
+                _LOGGER.debug("Data fetched from resource: %s", monitor_response.content)
+            except ValueError:
+                _LOGGER.warning("REST result could not be parsed as JSON")
+                _LOGGER.debug("Erroneous JSON: %s", self.monitor_data)
+            except Exception as exc:
+                _LOGGER.error(exc)
+                raise exc
 
             # hack fix
-            if self._id_plant is not None:
-                energy = await self._async_client.get(
-                    _ENERGY_ENDPOINT.format(
-                        id=self._id_plant,
-                        year=datetime.now().year,
-                        month=datetime.now().month,
-                        day=datetime.now().day,
-                    ),
-                    timeout=60,
-                    cookies=self._session,
+            if self._plant_id is None:
+                _LOGGER.error(f"Unable to get plant id. Response: {monitor_response.content}") 
+                return
+                
+            energy_response = await self._async_client.get(
+                _ENERGY_ENDPOINT.format(
+                    id=self._plant_id,
+                    year=datetime.now().year,
+                    month=datetime.now().month,
+                    day=datetime.now().day,
+                ),
+                timeout=60,
+                cookies=self._session,
+            )
+            
+            if energy_response.content is None:
+                _LOGGER.warning("Empty reply found when expecting JSON data")
+                raise AtonStorageConnectionError
+            
+            elif energy_response.content == "Unauthorized":
+                self._session = None
+                raise AtonStorageConnectionError
+                
+            try:
+                self.energy_data = json.loads(energy_response.content)
+                _LOGGER.debug(
+                    "Data fetched from resource: %s", energy_response.content
                 )
-                if energy.content is None:
-                    _LOGGER.error("Unable to start fetching data")
-                    raise AtonStorageConnectionError
-                elif energy.content == "Unauthorized":
-                    self._session = None
-                    raise AtonStorageConnectionError
-                json_dict_energy = energy.content
-                if json_dict_energy is not None:
-                    try:
-                        energy_data = json.loads(json_dict_energy)
-                        _LOGGER.debug(
-                            "Data fetched from resource: %s", json_dict_energy
-                        )
 
-                        self.data["eVenduta"] = energy_data["tot_pReteOut"]
-
-                    except ValueError:
-                        _LOGGER.warning("REST result could not be parsed as JSON")
-                        _LOGGER.debug("Erroneous JSON: %s", self.data)
-                    except Exception as exc:
-                        _LOGGER.error(exc)
-                        raise exc
-                else:
-                    _LOGGER.warning("Empty reply found when expecting JSON data")
+            except ValueError:
+                _LOGGER.warning("REST result could not be parsed as JSON")
+                _LOGGER.debug("Erroneous JSON: %s", self.monitor_data)
+            except Exception as exc:
+                _LOGGER.error(exc)
+                raise exc
 
         except TypeError:
-            _LOGGER.error("Unable to fetch data. Response: %s", self.data)
+            _LOGGER.error("Unable to fetch data. Response: %s", self.monitor_data)
         except Exception as exc:
             _LOGGER.error(exc)
             raise exc
 
-    def get_raw_data(self, __name: str):
-        return self.data[__name]
+    def get_raw_data(self, key: str):
+        if key in self.monitor_data:
+            return self.monitor_data[key]
+
+        if key in self.energy_data:
+            return self.energy_data[key]
+
+        _LOGGER.warning("Key %s not found in monitor_data or energy_data", key)
 
     @property
     def grid_to_house(self) -> bool:
-        return int(self.data["status"]) & 1 == 1
+        return int(self.monitor_data["status"]) & 1 == 1
 
     @property
     def solar_to_battery(self) -> bool:
-        return int(self.data["status"]) & 2 == 2
+        return int(self.monitor_data["status"]) & 2 == 2
 
     @property
     def solar_to_grid(self) -> bool:
-        return int(self.data["status"]) & 4 == 4
+        return int(self.monitor_data["status"]) & 4 == 4
 
     @property
     def battery_to_house(self) -> bool:
-        return int(self.data["status"]) & 8 == 8
+        return int(self.monitor_data["status"]) & 8 == 8
 
     @property
     def solar_to_house(self) -> bool:
-        return int(self.data["status"]) & 16 == 16
+        return int(self.monitor_data["status"]) & 16 == 16
 
     @property
     def grid_to_battery(self) -> bool:
-        return int(self.data["status"]) & 32 == 32
+        return int(self.monitor_data["status"]) & 32 == 32
 
     @property
     def battery_to_grid(self) -> bool:
-        return int(self.data["status"]) & 64 == 64
+        return int(self.monitor_data["status"]) & 64 == 64
 
     @property
     def serial_number(self) -> str:
-        return self.data["serialNumber"]
+        return self.monitor_data["serialNumber"]
 
     @property
     def last_update(self) -> str:
-        return self.data["data"]
+        return self.monitor_data["data"]
 
     @property
     def status(self) -> str:
-        return self.data["status"]
+        return self.monitor_data["status"]
 
     @property
     def status_man(self) -> str:
-        return self.data["statusMan"]
+        return self.monitor_data["statusMan"]
 
     @property
     def instant_solar_power(self) -> int:
-        return int(self.data["pSolare"])
+        return int(self.monitor_data["pSolare"])
 
     @property
     def instant_user_power(self) -> int:
-        return int(self.data["pUtenze"])
+        return int(self.monitor_data["pUtenze"])
 
     @property
     def instant_user_power_real(self) -> int:
-        return int(self.data["pUtenzeReal"])
+        return int(self.monitor_data["pUtenzeReal"])
 
     @property
     def instant_battery_power(self) -> int:
-        return int(self.data["pBatteria"])
+        return int(self.monitor_data["pBatteria"])
 
     @property
     def instant_grid_input_power(self) -> int:
-        return int(self.data["pReteIn"])
+        return int(self.monitor_data["pReteIn"])
 
     @property
     def instant_grid_output_power(self) -> int:
-        return int(self.data["pReteOut"])
+        return int(self.monitor_data["pReteOut"])
 
     @property
     def instant_grid_power(self) -> int:
-        return int(self.data["pRete"])
+        return int(self.monitor_data["pRete"])
 
     @property
     def instant_grid_power_real(self) -> int:
-        return int(self.data["pReteReal"])
+        return int(self.monitor_data["pReteReal"])
 
     @property
     def status_of_charge(self) -> float:
-        return float(self.data["soc"])
+        return float(self.monitor_data["soc"])
 
     @property
     def run_mode(self) -> int:
-        return int(self.data["runMode"])
+        return int(self.monitor_data["runMode"])
 
     @property
     def string1_current(self) -> float:
-        return float(self.data["string1I"])
+        return float(self.monitor_data["string1I"])
 
     @property
     def string1_voltage(self) -> float:
-        return float(self.data["string1V"])
+        return float(self.monitor_data["string1V"])
 
     @property
     def string2_current(self) -> float:
-        return float(self.data["string2I"])
+        return float(self.monitor_data["string2I"])
 
     @property
     def string2_voltage(self) -> float:
-        return float(self.data["string2V"])
+        return float(self.monitor_data["string2V"])
 
     @property
     def user_current(self) -> float:
-        return float(self.data["utenzeI"])
+        return float(self.monitor_data["utenzeI"])
 
     @property
     def user_voltage(self) -> float:
-        return float(self.data["utenzeV"])
+        return float(self.monitor_data["utenzeV"])
 
     @property
     def battery_voltage(self) -> float:
-        return float(self.data["vb"])
+        return float(self.monitor_data["vb"])
 
     @property
     def battery_current(self) -> float:
-        return float(self.data["ib"])
+        return float(self.monitor_data["ib"])
 
     @property
     def fw_Scheda(self) -> str:
-        return self.data["fwScheda"]
+        return self.monitor_data["fwScheda"]
 
     @property
     def rel_inverter(self) -> str:
-        return self.data["relInverter"]
+        return self.monitor_data["relInverter"]
 
     @property
     def rel_manager(self) -> str:
-        return self.data["relManager"]
+        return self.monitor_data["relManager"]
 
     @property
     def rel_charger(self) -> str:
-        return self.data["relCharger"]
+        return self.monitor_data["relCharger"]
 
     @property
     def rel_bios(self) -> str:
-        return self.data["relBIOS"]
+        return self.monitor_data["relBIOS"]
 
     @property
-    def charged(self) -> int:
-        return int(self.data["ahCaricati"])
+    def battery_charged(self) -> int:
+        return int(self.monitor_data["ahCaricati"])
 
     @property
-    def discharge(self) -> int:
-        return int(self.data["ahScaricati"])
+    def battery_discharged(self) -> int:
+        return int(self.monitor_data["ahScaricati"])
+    
+    @property
+    def battery_energy_charged(self) -> int:
+        return float(self.energy_data["tot_pBattteria"])
+    
+    @property
+    def battery_energy_discharged(self) -> int:
+        return float(self.energy_data["tot_pBatteriaB"])
 
     @property
     def max_selled_power(self) -> int:
-        return self.data["pMaxVenduta"]
+        return self.monitor_data["pMaxVenduta"]
 
     @property
     def max_pannel_power(self) -> int:
-        return self.data["pMaxPannelli"]
+        return self.monitor_data["pMaxPannelli"]
 
     @property
     def max_battery_power(self) -> int:
-        return self.data["pMaxBatteria"]
+        return self.monitor_data["pMaxBatteria"]
 
     @property
     def max_bought_power(self) -> int:
-        return self.data["pMaxComprata"]
+        return self.monitor_data["pMaxComprata"]
 
     @property
-    def selled_energy(self) -> int:
-        return self.data["eVenduta"]
-
-    @property
-    def pannel_energy(self) -> int:
-        return self.data["ePannelli"]
-
-    @property
-    def self_consumed_energy(self) -> int:
-        return self.data["eBatteria"]
+    def sold_energy(self) -> int:
+        return float(self.energy_data["tot_pReteOut"])
 
     @property
     def bought_energy(self) -> int:
-        return self.data["eComprata"]
+        return float(self.energy_data["tot_pReteIn"])
+
+    @property
+    def pannel_energy(self) -> int:
+        return self.monitor_data["ePannelli"]
 
     @property
     def consumed_energy(self) -> int:
-        return int(self.bought_energy) + int(self.self_consumed_energy)
+        return float(self.bought_energy) + float(self.battery_energy_discharged)
 
     # "ingressi1": "0",
     # "ingressi2": "160",
@@ -400,15 +411,15 @@ class Controller:
 
     @property
     def grid_voltage(self) -> float:
-        return self.data["gridV"]
+        return self.monitor_data["gridV"]
 
     @property
     def grid_frequency(self) -> float:
-        return self.data["gridHz"]
+        return self.monitor_data["gridHz"]
 
     @property
     def grid_power(self) -> float:
-        return self.data["pGrid"]
+        return self.monitor_data["pGrid"]
 
     # "string1IIN": "0",
     # "string1VIN": "0",
@@ -417,24 +428,24 @@ class Controller:
 
     @property
     def temperature(self) -> float:
-        return self.data["temperatura"]
+        return self.monitor_data["temperatura"]
 
     @property
     def temperature2(self) -> float:
-        return self.data["temperatura2"]
+        return self.monitor_data["temperatura2"]
 
     # "dataAllarme": "07/11/2022 07:11:28",
 
     @property
     def update_delay(self) -> int:
-        return self.data["DiffDate"]
+        return self.monitor_data["DiffDate"]
 
     # "DiffDate": "829",
     # "timestampScheda": "07/11/2022 11:13:13",
 
     @property
     def vb_scheda(self) -> str:
-        return self.data["vbScheda"] | None
+        return self.monitor_data["vbScheda"] | None
 
     # "flagProgrammazione": "128",
     # "flagProgrammazione3": "72",
@@ -450,67 +461,67 @@ class Controller:
 
     @property
     def ev_num(self) -> int:
-        return int(self.data["num_EV"])
+        return int(self.monitor_data["num_EV"])
 
     @property
     def ev_status_of_charge(self) -> float:
-        return float(self.data["SoC_EV"])
+        return float(self.monitor_data["SoC_EV"])
 
     @property
     def ev_status(self) -> int:
-        return int(self.data["stato_EV"])
+        return int(self.monitor_data["stato_EV"])
 
     # var firstNumber = (parseInt(_data.stato_EV)&0xf0)>>4;
     # var secondNumber = parseInt(_data.stato_EV)&0x0f;
 
     @property
     def ev_status_off(self) -> bool:
-        return int(self.data["stato_EV"]) & 0xF0 >> 4 == 0 or (
-            int(self.data["stato_EV"]) & 0xF0 >> 4 == 1
-            and int(self.data["stato_EV"]) & 0x0F != 3
+        return int(self.monitor_data["stato_EV"]) & 0xF0 >> 4 == 0 or (
+            int(self.monitor_data["stato_EV"]) & 0xF0 >> 4 == 1
+            and int(self.monitor_data["stato_EV"]) & 0x0F != 3
         )
 
     @property
     def ev_status_on(self) -> bool:
         return (
-            int(self.data["stato_EV"]) & 0xF0 >> 4 == 1
-            and int(self.data["stato_EV"]) & 0x0F == 3
+            int(self.monitor_data["stato_EV"]) & 0xF0 >> 4 == 1
+            and int(self.monitor_data["stato_EV"]) & 0x0F == 3
         )
 
     @property
     def ev_status_charge(self) -> bool:
-        return int(self.data["stato_EV"]) & 0xF0 >> 4 == 2
+        return int(self.monitor_data["stato_EV"]) & 0xF0 >> 4 == 2
 
     @property
     def ev_status_warning(self) -> bool:
         return (
-            int(self.data["stato_EV"]) & 0xF0 >> 4 == 4
-            or int(self.data["stato_EV"]) & 0xF0 >> 4 == 5
+            int(self.monitor_data["stato_EV"]) & 0xF0 >> 4 == 4
+            or int(self.monitor_data["stato_EV"]) & 0xF0 >> 4 == 5
         )
 
     @property
     def ev_setp(self) -> float:
-        return float(self.data["setp_EV"])  # in A
+        return float(self.monitor_data["setp_EV"])  # in A
 
     @property
     def ev_power(self) -> int:
-        return int(self.data["potenza_EV"])  # carica in W
+        return int(self.monitor_data["potenza_EV"])  # carica in W
 
     @property
     def ev_kmh(self) -> float:
-        return float(self.data["kmh"])  # evCaricakmh km/h
+        return float(self.monitor_data["kmh"])  # evCaricakmh km/h
 
     @property
     def ev_e_ciclo_(self) -> float:
-        return float(self.data["e_ciclo_EV"])  # evScaricakWh
+        return float(self.monitor_data["e_ciclo_EV"])  # evScaricakWh
 
     @property
     def ev_km(self) -> float:
-        return float(self.data["km"])  # evScaricakm km
+        return float(self.monitor_data["km"])  # evScaricakm km
 
     @property
     def ev_perc_carica(self) -> float:
-        return float(self.data["perc_carica"])  # evCaricakmh %
+        return float(self.monitor_data["perc_carica"])  # evCaricakmh %
 
     # "paese": "IT",
     # "scena": "0",
@@ -519,7 +530,7 @@ class Controller:
 
     @property
     def battery_count(self) -> int:
-        return self.data["numBatterie"]
+        return self.monitor_data["numBatterie"]
 
 
 class AtonStorageConnectionError(Exception):

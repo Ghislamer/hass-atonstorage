@@ -238,27 +238,22 @@ INVERTER_SENSOR_DESCRIPTIONS = (
     ),
     # DAILY ENERGY MEASUREMENTS
     AtonStorageSensorEntityDescription(
-        key="eVenduta",
-        translation_key="eVenduta",
+        key="tot_pReteOut",
+        translation_key="tot_pReteOut",
         name="Daily sold energy",
         icon="mdi:transmission-tower-import",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        # value_conversion_function=lambda value: int(value) / 1000,
-        value_conversion_function=lambda value: float(value),
-        # last_reset=as_local(datetime.combine(date.today(), datetime.min.time())),
     ),
     AtonStorageSensorEntityDescription(
-        key="eComprata",
-        translation_key="eComprata",
+        key="tot_pReteIn",
+        translation_key="tot_pReteIn",
         name="Daily bought energy",
         icon="mdi:transmission-tower-export",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
-        value_conversion_function=lambda value: int(value) / 1000,
-        # last_reset=as_local(datetime.combine(date.today(), datetime.min.time())),
+        state_class=SensorStateClass.TOTAL_INCREASING
     ),
     AtonStorageSensorEntityDescription(
         key="ePannelli",
@@ -271,6 +266,7 @@ INVERTER_SENSOR_DESCRIPTIONS = (
         value_conversion_function=lambda value: int(value) / 1000,
         # last_reset=as_local(datetime.combine(date.today(), datetime.min.time())),
     ),
+    
     AtonStorageSensorEntityDescription(
         key="eBatteria",
         translation_key="eBatteria",
@@ -281,6 +277,24 @@ INVERTER_SENSOR_DESCRIPTIONS = (
         state_class=SensorStateClass.TOTAL_INCREASING,
         value_conversion_function=lambda value: int(value) / 1000,
         # last_reset=as_local(datetime.combine(date.today(), datetime.min.time())),
+    ),
+    AtonStorageSensorEntityDescription(
+        key="tot_pBatteria",
+        translation_key="tot_pBatteria",
+        name="Battery charged energy",
+        icon="mdi:battery-plus",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
+    ),
+    AtonStorageSensorEntityDescription(
+        key="tot_pBatteriaB",
+        translation_key="tot_pBatteriaB",
+        name="Battery discharged energy",
+        icon="mdi:battery-minus",
+        native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.TOTAL,
     ),
     # CALCULATED VALUES #
     # GRID IN-OUT
@@ -318,7 +332,7 @@ INVERTER_SENSOR_DESCRIPTIONS = (
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.TOTAL_INCREASING,
-        value_calc_function=lambda controller: int(controller.consumed_energy) / 1000,
+        value_calc_function=lambda controller: controller.consumed_energy,
     ),
     # SELF SUFFICIENCY
     AtonStorageSensorEntityDescription(
@@ -367,27 +381,6 @@ INVERTER_SENSOR_DESCRIPTIONS = (
         value_calc_function=lambda controller: abs(controller.instant_battery_power)
         if controller.instant_battery_power < 0
         else 0,
-    ),
-    # BATTERY CHARGED-DISCHARGED
-    AtonStorageIntegrationSensorEntityDescription(
-        key="eCharged",
-        translation_key="eCharged",
-        name="Battery charged energy",
-        icon="mdi:battery-plus",
-        # native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        # state_class=SensorStateClass.TOTAL,
-        source_sensor="instant_battery_power_input",
-    ),
-    AtonStorageIntegrationSensorEntityDescription(
-        key="eDischarged",
-        translation_key="eDischarged",
-        name="Battery discharged energy",
-        icon="mdi:battery-minus",
-        # native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-        device_class=SensorDeviceClass.ENERGY,
-        # state_class=SensorStateClass.TOTAL,
-        source_sensor="instant_battery_power_output",
     ),
     # EV
     AtonStorageSensorEntityDescription(
