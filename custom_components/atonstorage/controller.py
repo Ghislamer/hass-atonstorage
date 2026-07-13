@@ -337,7 +337,7 @@ class Controller:
     
     @property
     def battery_energy_charged(self) -> int:
-        return float(self.energy_data["tot_pBattteria"])
+        return float(self.energy_data["tot_pBatteria"])
     
     @property
     def battery_energy_discharged(self) -> int:
