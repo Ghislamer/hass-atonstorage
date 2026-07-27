@@ -285,7 +285,7 @@ INVERTER_SENSOR_DESCRIPTIONS = (
         icon="mdi:battery-plus",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     AtonStorageSensorEntityDescription(
         key="tot_pBatteriaB",
@@ -294,7 +294,7 @@ INVERTER_SENSOR_DESCRIPTIONS = (
         icon="mdi:battery-minus",
         native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
         device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
     ),
     # CALCULATED VALUES #
     # GRID IN-OUT
